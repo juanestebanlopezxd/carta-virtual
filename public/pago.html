@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Envía tu pedido</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .pago { max-width: 480px; margin: 0 auto; padding: 18px 16px 40px; }
+    .tarjeta-p { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 18px; padding: 18px; margin-bottom: 12px; }
+    .monto { text-align: center; }
+    .monto small { color: var(--suave); font-size: 14px; }
+    .monto strong { display: block; font-size: 38px; letter-spacing: -1px; margin: 2px 0 6px; }
+    .monto .metodo { display: inline-block; font-weight: 700; font-size: 14px; background: var(--fondo); border-radius: 99px; padding: 6px 14px; }
+    .monto .cambio { margin: 10px 0 0; color: var(--suave); font-size: 14px; }
+    .paso-t { display: flex; gap: 10px; align-items: center; margin: 0 0 12px; font-size: 16px; }
+    .num { width: 26px; height: 26px; border-radius: 50%; background: var(--color); color: #fff; font-size: 13px; font-weight: 800; display: inline-grid; place-items: center; flex: none; }
+    .nota { font-size: 14px; color: var(--suave); margin: 0; line-height: 1.45; }
+    .cuenta { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 14px; background: var(--fondo); border-radius: 12px; margin-bottom: 8px; }
+    .cuenta .tipo { font-size: 12px; font-weight: 700; color: var(--suave); text-transform: uppercase; letter-spacing: .5px; }
+    .cuenta .numero { font-size: 22px; font-weight: 800; letter-spacing: .5px; }
+    .cuenta .titular { font-size: 13px; color: var(--suave); }
+    .copiar { border: none; background: var(--color); color: #fff; border-radius: 99px; padding: 8px 14px; font-weight: 700; font-size: 13px; flex: none; }
+    .copiar.listo { background: var(--ok); }
+    .qr { text-align: center; margin-top: 14px; }
+    .qr img { width: 100%; max-width: 250px; border-radius: 12px; border: 1px solid var(--borde); }
+    .qr a { display: inline-block; margin-top: 8px; font-weight: 700; color: var(--tinta); }
+    .qr p { font-size: 13px; color: var(--suave); margin: 6px 0 0; }
+    .resumen-ped { font-size: 14px; line-height: 1.5; }
+    .resumen-ped .det { color: var(--suave); font-size: 13px; }
+    .enviado { background: #e4f5ea; border-radius: 12px; padding: 12px 14px; color: #14532d; font-size: 14px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <main class="pago">
+    <section class="tarjeta-p monto">
+      <small id="rest-nombre">Tu pedido</small>
+      <strong id="total">$0</strong>
+      <span class="metodo" id="metodo"></span>
+      <p class="cambio oculto" id="cambio"></p>
+      <p class="cambio oculto" id="nota-dom">🛵 Valor de los productos. El domicilio se cobra aparte según tu zona.</p>
+    </section>
+
+    <!-- Solo transferencia / QR -->
+    <section class="tarjeta-p oculto" id="paso-pagar">
+      <p class="paso-t"><span class="num">1</span><b>Paga <span id="total-txt"></span></b></p>
+      <div id="cuentas"></div>
+      <div class="qr oculto" id="bloque-qr">
+        <img id="qr" alt="Código QR de pago">
+        <br><a id="descargar-qr" download>⬇ Guardar QR en el celular</a>
+        <p>Sirve desde <b>Nequi, Bancolombia, Daviplata o cualquier banco</b>. Si estás en el celular: guarda el QR y en tu app elige <b>pagar con QR → desde la galería</b>.</p>
+      </div>
+      <p class="nota" id="instrucciones" style="margin-top:10px"></p>
+    </section>
+
+    <section class="tarjeta-p oculto" id="paso-captura">
+      <p class="paso-t"><span class="num">2</span><b>Toma una captura del pago aprobado</b></p>
+      <p class="nota">La necesitas para que el restaurante confirme tu pedido.</p>
+    </section>
+
+    <section class="tarjeta-p">
+      <p class="paso-t"><span class="num" id="num-enviar">3</span><b>Envía tu pedido por WhatsApp</b></p>
+      <div class="resumen-ped" id="resumen"></div>
+      <a class="boton centrado whatsapp" id="enviar" target="_blank" rel="noopener" style="margin-top:14px">Enviar pedido por WhatsApp</a>
+      <p class="nota" id="nota-enviar" style="margin-top:10px"></p>
+      <div class="enviado oculto" id="enviado">
+        ✅ ¡Listo! Si ya enviaste el mensaje, el restaurante te confirmará por WhatsApp.
+        <br>¿No se abrió WhatsApp? Toca el botón verde otra vez.
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const pesos = (n) => '$' + Number(n).toLocaleString('es-CO');
+    const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const ref = new URLSearchParams(location.search).get('ref');
+
+    async function copiar(texto, boton) {
+      try { await navigator.clipboard.writeText(texto); }
+      catch {
+        const t = document.createElement('textarea'); t.value = texto; document.body.appendChild(t); t.select();
+        try { document.execCommand('copy'); } catch {} t.remove();
+      }
+      const antes = boton.textContent;
+      boton.textContent = 'Copiado ✓'; boton.classList.add('listo');
+      setTimeout(() => { boton.textContent = antes; boton.classList.remove('listo'); }, 1600);
+    }
+
+    async function iniciar() {
+      const r = await fetch(`/api/pedidos/${encodeURIComponent(ref)}`);
+      if (!r.ok) { document.body.innerHTML = '<main class="pagina"><div class="caja"><h1>Pedido no encontrado</h1></div></main>'; return; }
+      const p = await r.json();
+      const c = await fetch(`/api/restaurantes/${p.restaurante}`).then((x) => x.json());
+      const efectivo = p.metodoPago === 'efectivo';
+
+      document.title = `Envía tu pedido · ${c.nombre}`;
+      document.documentElement.style.setProperty('--color', c.colorPrimario || '#E4572E');
+      $('#rest-nombre').textContent = `Tu pedido en ${c.nombre} · Ref. ${p.referencia}`;
+      $('#total').textContent = pesos(p.total);
+      $('#metodo').textContent = efectivo ? '💵 Pagas en efectivo al recibir' : '📲 Transferencia / QR';
+      if (efectivo && p.pagaCon) {
+        $('#cambio').textContent = p.domicilioAparte
+          ? `Pagas con ${pesos(p.pagaCon)}`
+          : `Pagas con ${pesos(p.pagaCon)} · Cambio: ${pesos(p.pagaCon - p.total)}`;
+        $('#cambio').classList.remove('oculto');
+      }
+
+      if (p.domicilioAparte) $('#nota-dom').classList.remove('oculto');
+      $('#resumen').innerHTML = p.items.map((i) => `<div>${esc(i.detalle)}</div>`).join('');
+
+      if (efectivo) {
+        $('#num-enviar').textContent = '1';
+        $('#nota-enviar').textContent = 'Se abre WhatsApp con tu pedido ya escrito. Solo toca enviar.';
+      } else {
+        $('#paso-pagar').classList.remove('oculto');
+        $('#paso-captura').classList.remove('oculto');
+        $('#total-txt').textContent = pesos(p.total);
+        $('#cuentas').innerHTML = c.pago.cuentas.map((k) => `
+          <div class="cuenta">
+            <div>
+              <div class="tipo">${esc(k.tipo)}</div>
+              <div class="numero">${esc(k.numero)}</div>
+              ${k.titular ? `<div class="titular">${esc(k.titular)}</div>` : ''}
+            </div>
+            <button class="copiar" data-copiar="${esc(String(k.numero).replace(/\s/g, ''))}">Copiar</button>
+          </div>`).join('');
+        if (c.pago.qr) {
+          $('#qr').src = c.pago.qr;
+          $('#descargar-qr').href = c.pago.qrDescarga || c.pago.qr;
+          $('#descargar-qr').download = `QR-${c.slug}.png`;
+          $('#bloque-qr').classList.remove('oculto');
+        }
+        $('#instrucciones').textContent = c.pago.instrucciones || '';
+        $('#nota-enviar').innerHTML = 'Se abre WhatsApp con tu pedido ya escrito. Envíalo y <b>adjunta la captura del pago</b> (📎) en el mismo chat.';
+      }
+
+      // Mensaje completo (lo entregó el servidor al crear el pedido). Si no está, se arma uno corto.
+      let mensaje = null;
+      try { mensaje = sessionStorage.getItem(`mensaje:${p.referencia}`); } catch {}
+      if (!mensaje) {
+        mensaje = `🧾 *Pedido ${p.referencia}* · ${c.nombre}\n` + p.items.map((i) => i.detalle).join('\n') +
+          `\n*TOTAL: ${pesos(p.total)}*\n` + (efectivo ? '💵 Pago en efectivo al recibir' : '📲 Pago por transferencia / QR · adjunto la captura 👇');
+      }
+      $('#enviar').href = `https://wa.me/${c.whatsapp}?text=${encodeURIComponent(mensaje)}`;
+    }
+
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-copiar]');
+      if (b) copiar(b.dataset.copiar, b);
+    });
+
+    $('#enviar').addEventListener('click', () => {
+      // Registra que el cliente envió el pedido (para el panel, si lo usan)
+      fetch(`/api/pedidos/${encodeURIComponent(ref)}/reportar-pago`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', keepalive: true,
+      }).catch(() => {});
+      setTimeout(() => $('#enviado').classList.remove('oculto'), 600);
+    });
+
+    ref ? iniciar() : (document.body.innerHTML = '<main class="pagina"><div class="caja"><h1>Falta la referencia</h1></div></main>');
+  </script>
+</body>
+</html>

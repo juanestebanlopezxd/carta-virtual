@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Estado de tu pedido</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="pagina">
+    <div class="caja">
+      <div class="icono esperando" id="icono"><div class="girando"></div></div>
+      <h1 id="titulo">Consultando tu pedido…</h1>
+      <p id="texto"></p>
+      <div class="resumen oculto" id="resumen"></div>
+      <a class="boton centrado whatsapp oculto" id="volver-wa" href="#">Volver a WhatsApp</a>
+      <a class="boton centrado secundario oculto" id="reintentar" href="#">Volver a la carta</a>
+    </div>
+  </main>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const pesos = (n) => '$' + Number(n).toLocaleString('es-CO');
+    const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const qs = new URLSearchParams(location.search);
+    const ref = qs.get('ref');
+    const idTx = qs.get('id'); // Wompi agrega ?id=<transacción> al volver
+    let intentos = 0;
+    let whatsappRest = '';
+
+    async function consultar() {
+      intentos++;
+      const url = `/api/pedidos/${encodeURIComponent(ref)}` + (idTx ? `?id=${encodeURIComponent(idTx)}` : '');
+      const r = await fetch(url);
+      if (!r.ok) return mostrar('mal', 'Pedido no encontrado', 'Revisa el enlace o vuelve a la carta.');
+      const p = await r.json();
+
+      if (!whatsappRest) {
+        const c = await fetch(`/api/restaurantes/${p.restaurante}`).then((x) => x.json()).catch(() => ({}));
+        whatsappRest = c.whatsapp || '';
+        if (c.colorPrimario) document.documentElement.style.setProperty('--color', c.colorPrimario);
+        $('#reintentar').href = `/r/${p.restaurante}`;
+      }
+
+      $('#resumen').innerHTML =
+        `<strong>Pedido ${esc(p.referencia)}</strong><br>` +
+        p.items.map((i) => esc(i.detalle || `${i.cantidad}x ${i.nombre}`)).join('<br>') +
+        `<br><strong>Total: ${pesos(p.total)}</strong> · ${p.entrega === 'domicilio' ? 'Domicilio' : 'Recoges en el local'}`;
+      $('#resumen').classList.remove('oculto');
+
+      if (p.estado === 'pagado') {
+        mostrar('ok', `¡Pago confirmado, ${esc(p.nombre)}!`, 'Tu pedido ya está en preparación. Te enviamos la confirmación a tu WhatsApp.');
+        if (whatsappRest) {
+          const msg = encodeURIComponent(`Hola, mi pedido es el ${p.referencia}`);
+          $('#volver-wa').href = `https://wa.me/${whatsappRest}?text=${msg}`;
+          $('#volver-wa').classList.remove('oculto');
+        }
+      } else if (p.estado === 'rechazado') {
+        mostrar('mal', 'No pudimos confirmar tu pago', 'Si ya transferiste, escríbenos por WhatsApp con el comprobante y la referencia del pedido.');
+        if (whatsappRest) {
+          const msg = encodeURIComponent(`Hola, mi pedido ${p.referencia} salió como pago no confirmado. Te envío el comprobante.`);
+          $('#volver-wa').href = `https://wa.me/${whatsappRest}?text=${msg}`;
+          $('#volver-wa').textContent = 'Escribir por WhatsApp';
+          $('#volver-wa').classList.remove('oculto');
+        }
+        $('#reintentar').classList.remove('oculto');
+      } else if (p.estado === 'esperando_pago') {
+        mostrar('esperando', 'Falta tu pago', 'Todavía no nos has avisado que transferiste.');
+        $('#reintentar').href = `/pago.html?ref=${encodeURIComponent(p.referencia)}`;
+        $('#reintentar').textContent = 'Ver datos para pagar';
+        $('#reintentar').classList.remove('oculto');
+      } else {
+        // por_verificar: el restaurante está revisando que la plata haya llegado
+        mostrar('esperando', 'Estamos verificando tu pago', 'El restaurante está revisando que la transferencia haya llegado. Te confirmamos por WhatsApp y aquí mismo. Puedes cerrar esta página.');
+        if (intentos < 360) setTimeout(consultar, 5000);
+      }
+    }
+
+    function mostrar(tipo, titulo, texto) {
+      const i = $('#icono');
+      i.className = 'icono ' + tipo;
+      i.innerHTML = tipo === 'ok' ? '✓' : tipo === 'mal' ? '✕' : '<div class="girando"></div>';
+      $('#titulo').innerHTML = titulo;
+      $('#texto').textContent = texto;
+    }
+
+    ref ? consultar() : mostrar('mal', 'Falta la referencia del pedido', '');
+  </script>
+</body>
+</html>

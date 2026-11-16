@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Panel de pedidos</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    :root { --color: #1d1b19; }
+    .barra-admin { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 18px 0; }
+    .barra-admin select, .barra-admin input { border: 1px solid var(--borde); border-radius: 10px; padding: 9px 11px; background: #fff; }
+    .pedido { background: #fff; border: 1px solid var(--borde); border-radius: var(--radio); padding: 14px; margin-bottom: 10px; }
+    .pedido.por_verificar { border: 2px solid #f0a020; box-shadow: 0 2px 12px rgba(240,160,32,.15); }
+    .pedido header { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+    .pedido h3 { margin: 0; font-size: 16px; }
+    .pedido .meta { color: var(--suave); font-size: 13px; margin: 4px 0 8px; }
+    .pill { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 99px; white-space: nowrap; }
+    .pill.pagado { background: #e4f5ea; color: var(--ok); }
+    .pill.esperando_pago { background: #efeae4; color: var(--suave); }
+    .pill.por_verificar { background: #fff1d6; color: #8a5300; }
+    .pill.contra_entrega { background: #e8eefc; color: #1e3a8a; }
+    .efectivo-info { background: #eef3ff; border-radius: 10px; padding: 9px 12px; font-size: 13.5px; margin-top: 10px; }
+    .pill.rechazado { background: #fde8e8; color: var(--error); }
+    .acciones { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+    .acciones button, .acciones a { border: 1px solid var(--borde); background: var(--fondo); border-radius: 9px; padding: 6px 11px; font-size: 13px; font-weight: 600; text-decoration: none; color: inherit; }
+    .acciones button.activo { background: var(--tinta); color: #fff; border-color: var(--tinta); }
+    .verificar { background: #fff8ea; border-radius: 12px; padding: 12px; margin-top: 10px; }
+    .verificar p { margin: 0 0 8px; font-size: 13.5px; }
+    .verificar .botones { display: flex; gap: 8px; }
+    .verificar .botones button { flex: 1; border: none; border-radius: 10px; padding: 11px; font-weight: 700; font-size: 14px; }
+    .b-ok { background: var(--ok); color: #fff; }
+    .b-no { background: #fde8e8; color: var(--error); }
+    .comp { display: block; margin: 0 0 10px; }
+    .comp img { max-width: 100%; max-height: 320px; border-radius: 10px; border: 1px solid var(--borde); cursor: zoom-in; }
+    .avisar { display: inline-flex !important; align-items: center; gap: 6px; background: #1fa855 !important; color: #fff !important; border-color: #1fa855 !important; }
+    .item-admin { margin-bottom: 6px; }
+    .mod { font-size: 13.5px; padding-left: 14px; }
+    .mod.sin { color: var(--error); }
+    .mod.mas { color: var(--ok); }
+    .vacio { text-align: center; color: var(--suave); padding: 40px 0; }
+    .contadores { display: flex; gap: 8px; flex-wrap: wrap; }
+    .contadores span { background: #fff; border: 1px solid var(--borde); border-radius: 99px; padding: 5px 11px; font-size: 13px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <main class="contenedor">
+    <h1 style="margin-top:24px">Pedidos</h1>
+
+    <form id="login" class="barra-admin">
+      <input id="clave" type="password" placeholder="Clave del panel (ADMIN_KEY)" required>
+      <button class="chip activo" type="submit">Entrar</button>
+    </form>
+
+    <div id="panel" class="oculto">
+      <div class="barra-admin">
+        <select id="filtro-rest"><option value="">Todos los restaurantes</option></select>
+        <select id="filtro-estado">
+          <option value="activos">Pedidos activos</option>
+          <option value="por_verificar">Transferencias por verificar</option>
+          <option value="contra_entrega">Efectivo por cobrar</option>
+          <option value="pagado">Solo pagados</option>
+          <option value="">Todos</option>
+        </select>
+      </div>
+      <div class="contadores" id="contadores"></div>
+      <p style="color:var(--suave);font-size:13px">Se actualiza solo cada 10 segundos.</p>
+      <div id="lista"></div>
+    </div>
+  </main>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const pesos = (n) => '$' + Number(n).toLocaleString('es-CO');
+    const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const ESTADOS = { nuevo: 'Nuevo', preparando: 'Preparando', enviado: 'Enviado', entregado: 'Entregado' };
+    const NOMBRE_ESTADO = { pagado: 'Pagado', esperando_pago: 'No enviado', por_verificar: 'Transferencia por verificar', rechazado: 'Rechazado', contra_entrega: 'Efectivo · por cobrar' };
+    let clave = sessionStorage.getItem('adminKey') || '';
+    let conocidos = null;
+    let restaurantes = {};
+    let whatsappAutomatico = false;
+    const imagenes = {}; // cache de comprobantes (blob URLs)
+
+    async function api(ruta, opciones = {}) {
+      const r = await fetch(ruta, { ...opciones, headers: { 'Content-Type': 'application/json', 'X-Admin-Key': clave } });
+      if (r.status === 401) { sessionStorage.removeItem('adminKey'); throw new Error('Clave incorrecta'); }
+      if (ruta.startsWith('/api/admin/pedidos?') || ruta === '/api/admin/pedidos') whatsappAutomatico = r.headers.get('X-Whatsapp-Automatico') === '1';
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Error');
+      return data;
+    }
+
+    // Mensaje listo para mandar al cliente desde el WhatsApp del restaurante
+    function enlaceAviso(p) {
+      const r = restaurantes[p.restaurante] || {};
+      const nombre = p.cliente.nombre.split(' ')[0];
+      const inicio = p.metodoPago === 'efectivo' && p.estado !== 'pagado'
+        ? `Hola ${nombre} 👋, recibimos tu pedido en ${r.nombre || 'el restaurante'} (pago en efectivo: ${pesos(p.total)}). `
+        : `Hola ${nombre} 👋, confirmamos tu pago de ${pesos(p.total)} en ${r.nombre || 'el restaurante'}. `;
+      const texto = inicio +
+        `Tu pedido ${p.referencia} ya está en preparación${p.entrega === 'domicilio' ? ' y te lo llevamos a ' + p.cliente.direccion : ''}. ¡Gracias!`;
+      return `https://wa.me/${p.cliente.telefono}?text=${encodeURIComponent(texto)}`;
+    }
+
+    async function cargar() {
+      const rest = $('#filtro-rest').value;
+      const pedidos = await api('/api/admin/pedidos' + (rest ? `?restaurante=${rest}` : ''));
+      const filtro = $('#filtro-estado').value;
+      const visibles = pedidos.filter((p) =>
+        !filtro ? true : filtro === 'activos' ? ['por_verificar', 'pagado', 'contra_entrega'].includes(p.estado) : p.estado === filtro);
+
+      // Aviso sonoro cuando llega un pago para verificar
+      const pendientes = new Set(pedidos.filter((p) => ['por_verificar', 'contra_entrega'].includes(p.estado)).map((p) => p.referencia));
+      if (conocidos && [...pendientes].some((r) => !conocidos.has(r))) avisar();
+      conocidos = pendientes;
+
+      const cuenta = (e) => pedidos.filter((p) => p.estado === e).length;
+      $('#contadores').innerHTML =
+        `<span>🟠 Transferencias por verificar: ${cuenta('por_verificar')}</span><span>🔵 Efectivo por cobrar: ${cuenta('contra_entrega')}</span><span>🟢 Pagados: ${cuenta('pagado')}</span>`;
+
+      $('#lista').innerHTML = visibles.length ? visibles.map(tarjeta).join('') : '<p class="vacio">No hay pedidos en esta vista.</p>';
+      visibles.filter((p) => p.comprobante).forEach(cargarComprobante);
+    }
+
+    function tarjeta(p) {
+      const items = p.items.map((i) => `<div class="item-admin"><strong>${i.cantidad} × ${esc(i.nombre)}</strong>
+          ${(i.sin || []).length ? `<div class="mod sin">Sin: ${esc(i.sin.join(', '))}</div>` : ''}
+          ${(i.adicionales || []).map((a) => `<div class="mod mas">+ ${a.cantidad} ${esc(a.nombre)}</div>`).join('')}
+          ${i.nota ? `<div class="mod">📝 ${esc(i.nota)}</div>` : ''}</div>`).join('');
+
+      let bloquePago = '';
+      if (p.estado === 'por_verificar' || p.estado === 'esperando_pago') {
+        bloquePago = `<div class="verificar">
+          ${p.comprobante ? `<a class="comp" data-comp="${esc(p.referencia)}" target="_blank"><img alt="Comprobante"></a>` : ''}
+          <p>${p.estado === 'por_verificar'
+            ? `El cliente envió el pedido por WhatsApp con la captura. <b>Revisa en Nequi (o en el SMS de pago) que llegaron ${pesos(p.total)}</b> de ${esc(p.cliente.nombre)}. Ref. ${esc(p.referencia)}.`
+            : 'El cliente armó el pedido pero todavía no lo ha enviado por WhatsApp.'}</p>
+          <div class="botones">
+            <button class="b-ok" data-pago="confirmar" data-ref="${esc(p.referencia)}">✓ Confirmar pago</button>
+            <button class="b-no" data-pago="rechazar" data-ref="${esc(p.referencia)}">✕ No llegó</button>
+          </div>
+        </div>`;
+      }
+
+      if (p.estado === 'contra_entrega') {
+        bloquePago = `<div class="efectivo-info">💵 Cobrar <b>${pesos(p.total)}</b> en efectivo${p.pagaCon ? ` · paga con ${pesos(p.pagaCon)} → <b>cambio ${pesos(p.pagaCon - p.total)}</b>` : ' (paga exacto)'}
+          <div class="acciones" style="margin-top:8px"><button data-pago="confirmar" data-ref="${esc(p.referencia)}">✓ Marcar como cobrado</button></div></div>`;
+      }
+
+      const acciones = ['pagado', 'contra_entrega'].includes(p.estado) ? `<div class="acciones">
+          ${Object.entries(ESTADOS).map(([k, v]) =>
+            `<button class="${p.estadoCocina === k ? 'activo' : ''}" data-ref="${esc(p.referencia)}" data-estado="${k}">${v}</button>`).join('')}
+          ${p.comprobante ? `<a data-comp-link="${esc(p.referencia)}" href="#">🧾 Comprobante</a>` : ''}
+          <a class="avisar" href="${enlaceAviso(p)}" target="_blank" rel="noopener">📲 ${p.notificado && whatsappAutomatico ? 'Escribir al cliente' : 'Avisar al cliente por WhatsApp'}</a>
+        </div>` : '';
+
+      return `<article class="pedido ${p.estado}">
+        <header>
+          <h3>${esc(p.referencia)} · ${pesos(p.total)}</h3>
+          <span class="pill ${p.estado}">${NOMBRE_ESTADO[p.estado] || p.estado}</span>
+        </header>
+        <div class="meta">${new Date(p.creado).toLocaleString('es-CO')} · ${esc(restaurantes[p.restaurante]?.nombre || p.restaurante)}</div>
+        <div>${items}</div>
+        <div class="meta" style="margin-top:8px">
+          <strong>${esc(p.cliente.nombre)}</strong> · <a href="https://wa.me/${p.cliente.telefono}" target="_blank">+${p.cliente.telefono}</a><br>
+          ${p.entrega === 'domicilio' ? '🛵 ' + esc(p.cliente.direccion) : '🏪 Recoge en el local'}
+          ${p.cliente.notas ? `<br>📝 ${esc(p.cliente.notas)}` : ''}
+        </div>
+        ${bloquePago}
+        ${acciones}
+      </article>`;
+    }
+
+    async function cargarComprobante(p) {
+      if (!imagenes[p.referencia]) {
+        const r = await fetch(`/api/admin/pedidos/${p.referencia}/comprobante`, { headers: { 'X-Admin-Key': clave } });
+        if (!r.ok) return;
+        imagenes[p.referencia] = URL.createObjectURL(await r.blob());
+      }
+      document.querySelectorAll(`[data-comp="${p.referencia}"]`).forEach((a) => { a.href = imagenes[p.referencia]; a.querySelector('img').src = imagenes[p.referencia]; });
+      document.querySelectorAll(`[data-comp-link="${p.referencia}"]`).forEach((a) => { a.href = imagenes[p.referencia]; a.target = '_blank'; });
+    }
+
+    function avisar() {
+      try {
+        const ctx = new AudioContext();
+        [0, 0.3].forEach((t) => { const o = ctx.createOscillator(); o.connect(ctx.destination); o.frequency.value = 880; o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.2); });
+      } catch {}
+      document.title = '🔔 Pago por verificar · Panel';
+      setTimeout(() => (document.title = 'Panel de pedidos'), 6000);
+    }
+
+    async function entrar() {
+      try {
+        const lista = await fetch('/api/restaurantes').then((r) => r.json());
+        restaurantes = Object.fromEntries(lista.map((r) => [r.slug, r]));
+        $('#filtro-rest').innerHTML = '<option value="">Todos los restaurantes</option>' +
+          lista.map((r) => `<option value="${esc(r.slug)}">${esc(r.nombre)}</option>`).join('');
+        await cargar();
+        sessionStorage.setItem('adminKey', clave);
+        $('#login').classList.add('oculto');
+        $('#panel').classList.remove('oculto');
+        setInterval(() => cargar().catch(() => {}), 10000);
+      } catch (e) { alert(e.message); }
+    }
+
+    $('#login').addEventListener('submit', (e) => { e.preventDefault(); clave = $('#clave').value; entrar(); });
+    $('#filtro-rest').addEventListener('change', cargar);
+    $('#filtro-estado').addEventListener('change', cargar);
+
+    document.addEventListener('click', async (e) => {
+      const est = e.target.closest('[data-estado]');
+      if (est) {
+        await api(`/api/admin/pedidos/${est.dataset.ref}/estado`, { method: 'POST', body: JSON.stringify({ estadoCocina: est.dataset.estado }) });
+        return cargar();
+      }
+
+      const pg = e.target.closest('[data-pago]');
+      if (pg) {
+        const confirmar = pg.dataset.pago === 'confirmar';
+        const pedidoEf = pg.closest('.pedido').classList.contains('contra_entrega');
+        const pregunta = confirmar
+          ? (pedidoEf ? '¿Ya recibiste el efectivo de este pedido?' : '¿Ya verificaste en Nequi que llegó la plata?')
+          : '¿Marcar este pago como NO recibido? El cliente verá que no se pudo confirmar.';
+        if (!confirm(pregunta)) return;
+        pg.disabled = true;
+        try {
+          const p = await api(`/api/admin/pedidos/${pg.dataset.ref}/pago`, { method: 'POST', body: JSON.stringify({ accion: pg.dataset.pago }) });
+          await cargar();
+          // Sin API de WhatsApp: abrir el chat del cliente con el mensaje ya escrito
+          if (confirmar && !p.whatsappAutomatico && p.metodoPago !== 'efectivo') window.open(enlaceAviso(p), '_blank');
+        } catch (err) { alert(err.message); pg.disabled = false; }
+      }
+    });
+
+    if (clave) entrar();
+  </script>
+</body>
+</html>

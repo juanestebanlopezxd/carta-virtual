@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pago de prueba</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="pagina">
+    <div class="caja">
+      <span class="prueba">MODO PRUEBA · sin Wompi configurado</span>
+      <h1>Simular pago</h1>
+      <p>Esta pantalla reemplaza a Wompi mientras configuras las claves. Elige qué pasa con el pago:</p>
+      <div class="resumen" id="resumen">Cargando pedido…</div>
+      <button class="boton centrado" id="aprobar">✓ Aprobar pago</button>
+      <button class="boton centrado secundario" id="rechazar">✕ Rechazar pago</button>
+    </div>
+  </main>
+  <script>
+    const ref = new URLSearchParams(location.search).get('ref');
+    const pesos = (n) => '$' + Number(n).toLocaleString('es-CO');
+    fetch(`/api/pedidos/${encodeURIComponent(ref)}`).then((r) => r.json()).then((p) => {
+      document.getElementById('resumen').innerHTML = `<strong>Pedido ${p.referencia}</strong><br>Total a pagar: <strong>${pesos(p.total)}</strong>`;
+    });
+    async function enviar(resultado) {
+      document.querySelectorAll('button').forEach((b) => (b.disabled = true));
+      await fetch('/api/simular-pago', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ referencia: ref, resultado }),
+      });
+      location.href = `/estado.html?ref=${encodeURIComponent(ref)}`;
+    }
+    document.getElementById('aprobar').onclick = () => enviar('aprobar');
+    document.getElementById('rechazar').onclick = () => enviar('rechazar');
+  </script>
+</body>
+</html>
